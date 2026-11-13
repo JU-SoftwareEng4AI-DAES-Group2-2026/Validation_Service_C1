@@ -13,3 +13,4 @@ wheels/
 .vscode/
 .direnv/
 ./result/
+predictive_maintenance_data.xlsx
