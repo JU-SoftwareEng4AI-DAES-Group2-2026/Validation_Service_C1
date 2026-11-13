@@ -107,6 +107,7 @@ def load_data(path: str | Path) -> pl.DataFrame:
     text = header + "\n" + "\n".join(raw[header].to_list())
     return pl.read_csv(io.StringIO(text), try_parse_dates=True)
 
+
 # For testing purposes, this file can be executed on its own
 # with the provided xlsx sheet in the working directory
 if __name__ == "__main__":
