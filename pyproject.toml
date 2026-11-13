@@ -11,6 +11,7 @@ dependencies = [
     "fastexcel>=0.21.0",
     "numpy>=2.5.4",
     "polars>=2.1.0",
+    "ruff>=0.17.5",
     "scikit-learn>=1.9.1",
 ]
 
