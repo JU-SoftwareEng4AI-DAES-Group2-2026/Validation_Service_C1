@@ -1,24 +1,25 @@
 """Detect and impute missing sensor readings in predictive-maintenance data.
 
 The pipeline counts nulls in the sensor columns, flags each missing value in a
-``<sensor>_imputed`` column, and fills the gaps with a KNN imputer.
+``<sensor>_imputed`` column, and fills the gaps with a per-machine median
+computed from the same chunk of data.
 """
 
 import io
 from pathlib import Path
 
 import polars as pl
-from sklearn.impute import KNNImputer
 
 # A list of the sensor data we are interested in
 SENSOR_DATA = ["temperature", "vibration", "pressure", "rpm", "power"]
 
+# Columns that identify which readings a missing value is filled from.
+MACHINE = "machine_id"
+MODE = "operating_mode"
+
 
 def detect(df: pl.DataFrame) -> pl.DataFrame:
     """Count the missing values in each sensor column.
-
-    The counts are also printed so the pipeline can be followed from the
-    console.
 
     Args:
         df: Data containing every column in ``SENSOR_DATA``.
@@ -27,7 +28,7 @@ def detect(df: pl.DataFrame) -> pl.DataFrame:
         A one-row DataFrame with the null count of each sensor column.
     """
     null_count_df = df.select(SENSOR_DATA).null_count()
-    print(null_count_df)
+    # print(null_count_df)
     return null_count_df
 
 
@@ -50,32 +51,32 @@ def flag_missing(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def impute(df: pl.DataFrame) -> pl.DataFrame:
-    """Fill missing sensor values with a KNN imputer.
+    """Fill missing sensor values with medians from the same chunk.
 
-    Each missing value is replaced by the mean of that sensor in the two
-    nearest rows, measured over the sensor columns only. Non-sensor columns
-    are left untouched.
+    Each missing value is replaced by the median of that sensor for the same
+    machine and operating mode. If the machine has no other readings in that
+    mode, the machine's median over all modes is used instead. Only the rows
+    in ``df`` are used, so no model or historical data is needed. A value
+    stays null only if the machine has no readings at all for that sensor.
 
     Args:
-        df: Data containing every column in ``SENSOR_DATA``.
+        df: A chunk of data containing every column in ``SENSOR_DATA`` plus
+            ``machine_id`` and ``operating_mode``.
 
     Returns:
-        ``df`` with the nulls in the sensor columns filled in. The sensor
-        columns are returned as floats.
+        ``df`` with the nulls in the sensor columns filled in; other columns
+        are untouched.
     """
-    imputer = KNNImputer(n_neighbors=2, weights="uniform")
-    # KNNImputer only handles numeric data, so pass just the sensor columns.
-    imputed = imputer.fit_transform(df.select(SENSOR_DATA).to_numpy())
+    sensors = pl.col(SENSOR_DATA)
     return df.with_columns(
-        pl.Series(name, imputed[:, i]) for i, name in enumerate(SENSOR_DATA)
+        sensors.fill_null(sensors.median().over(MACHINE, MODE)).fill_null(
+            sensors.median().over(MACHINE)
+        )
     )
 
 
-def dai(df: pl.DataFrame) -> pl.DataFrame:
+def detect_and_impute(df: pl.DataFrame) -> pl.DataFrame:
     """Run the full detect-and-impute pipeline.
-
-    Prints the null counts before and after imputation, so the second print
-    should show zero for every sensor.
 
     Args:
         df: Data containing every column in ``SENSOR_DATA``.
@@ -112,4 +113,4 @@ def load_data(path: str | Path) -> pl.DataFrame:
 # with the provided xlsx sheet in the working directory
 if __name__ == "__main__":
     df = load_data("predictive_maintenance_data.xlsx")
-    dai(df)
+    detect_and_impute(df)
