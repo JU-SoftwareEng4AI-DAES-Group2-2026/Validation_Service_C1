@@ -4,6 +4,7 @@
   inputs = {
     #nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";
     nixpkgs.url = "https://channels.nixos.org/nixos-26.05/nixexprs.tar.zst";
+    nixpkgs-unstable.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";
 
     pyproject-nix = {
       url = "github:pyproject-nix/pyproject.nix";
@@ -76,9 +77,18 @@
           default = pkgs.mkShell {
             packages = [
               virtualenv
-              pkgs.uv
-              pkgs.act
-            ];
+            ] ++ (with pkgs; [
+              uv
+              act
+              dvc
+
+              azure-cli
+
+              opentofu 
+              tflint 
+
+
+            ]);
             env = {
               UV_NO_SYNC = "1";
               UV_PYTHON = pythonSet.python.interpreter;
