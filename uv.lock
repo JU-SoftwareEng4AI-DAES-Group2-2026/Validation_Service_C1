@@ -231,12 +231,12 @@ dependencies = [
     { name = "fastexcel" },
     { name = "numpy" },
     { name = "polars" },
-    { name = "ruff" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -244,8 +244,10 @@ requires-dist = [
     { name = "fastexcel", specifier = ">=0.21.0" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "polars", specifier = ">=2.1.0" },
-    { name = "ruff", specifier = ">=0.17.5" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.2.0" }]
+dev = [
+    { name = "pytest", specifier = ">=9.2.0" },
+    { name = "ruff", specifier = ">=0.17.5" },
+]
