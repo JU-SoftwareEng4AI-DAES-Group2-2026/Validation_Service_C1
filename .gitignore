@@ -13,3 +13,6 @@ wheels/
 .vscode/
 .direnv/
 ./result/
+
+# datasets
+data/*.csv
