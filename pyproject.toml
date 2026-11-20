@@ -11,6 +11,7 @@ dependencies = [
     "fastexcel>=0.21.0",
     "numpy>=2.5.4",
     "polars>=2.1.0",
+    "pydantic>=2.14.3",
 ]
 
 [build-system]
@@ -19,6 +20,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "polars>=2.1.0",
     "pytest>=9.2.0",
     "ruff>=0.17.5",
 ]
