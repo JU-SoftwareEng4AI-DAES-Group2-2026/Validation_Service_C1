@@ -15,5 +15,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "polars>=2.1.0",
     "pytest>=9.2.0",
 ]
