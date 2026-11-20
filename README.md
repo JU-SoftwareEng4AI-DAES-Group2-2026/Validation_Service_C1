@@ -1,5 +1,10 @@
 # System Architecture
 
+@startuml
+Alice->Bob : Hello
+return ok
+@enduml
+
 # Requirements
 
 ## C1: Sensor Quality and Data Validation Service
