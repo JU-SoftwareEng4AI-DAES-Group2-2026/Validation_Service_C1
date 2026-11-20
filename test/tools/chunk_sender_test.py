@@ -4,7 +4,7 @@ import importlib.util
 import json
 import sys
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -73,20 +73,72 @@ def run_main(monkeypatch, *args: str) -> list[float]:
 
 
 def test_load_year3_keeps_only_year_3(dataset):
-    days = chunk_sender.load_year3()["day"].unique().sort().to_list()
+    days = chunk_sender.load_year3()["timestamp"].dt.date().unique().sort().to_list()
     assert [str(d) for d in days] == ["2014-01-14", "2014-01-15", "2015-01-13"]
 
 
 def test_load_year3_keeps_only_sensor_columns(dataset):
     df = chunk_sender.load_year3()
-    assert df.columns == [*chunk_sender.COLUMNS, "day"]
+    assert df.columns == chunk_sender.COLUMNS
+    assert df.schema["machine_id"] == pl.String
+    assert df.schema["operating_mode"] == pl.String
 
 
-def test_load_year3_formats_values_for_json(dataset):
-    first = chunk_sender.load_year3().row(0, named=True)
+# --- select -------------------------------------------------------------------
+
+
+def test_select_filters_machines(dataset):
+    df = chunk_sender.select(chunk_sender.load_year3(), machines=["M002"])
+    assert df["machine_id"].unique().to_list() == ["M002"]
+
+
+def test_select_rejects_unknown_machine(dataset):
+    with pytest.raises(ValueError, match="M999"):
+        chunk_sender.select(chunk_sender.load_year3(), machines=["M001", "M999"])
+
+
+def test_select_date_range_is_inclusive(dataset):
+    df = chunk_sender.select(chunk_sender.load_year3(), start=date(2014, 1, 15), end=date(2015, 1, 13))
+    days = df["timestamp"].dt.date().unique().sort().to_list()
+    assert days == [date(2014, 1, 15), date(2015, 1, 13)]
+
+
+def test_select_days_counts_from_start(dataset):
+    df = chunk_sender.select(chunk_sender.load_year3(), start=date(2014, 1, 15), days=1)
+    assert df["timestamp"].dt.date().unique().to_list() == [date(2014, 1, 15)]
+
+
+# --- make_chunks --------------------------------------------------------------
+
+
+def test_make_chunks_default_is_one_machine_day(dataset):
+    windows = chunk_sender.make_chunks(chunk_sender.load_year3())
+    assert len(windows) == 3
+    assert all(len(w) == len(MACHINES) and all(len(c) == 24 for c in w) for w in windows)
+
+
+def test_make_chunks_respects_chunk_hours(dataset):
+    df = chunk_sender.select(chunk_sender.load_year3(), days=1)
+    windows = chunk_sender.make_chunks(df, chunk_hours=6)
+    assert len(windows) == 4
+    assert [c["timestamp"] for c in windows[1][0]] == [f"2014-01-14T{h:02d}:00:00" for h in range(6, 12)]
+
+
+def test_make_chunks_formats_values_for_json(dataset):
+    first = chunk_sender.make_chunks(chunk_sender.load_year3())[0][0][0]
     assert first["timestamp"] == "2014-01-14T00:00:00"
     assert first["machine_id"] == "M001"
-    assert isinstance(first["operating_mode"], str)
+    assert list(first) == chunk_sender.COLUMNS
+
+
+def test_make_chunks_is_deterministic(dataset):
+    df = chunk_sender.load_year3()
+    assert chunk_sender.make_chunks(df, 5) == chunk_sender.make_chunks(df.reverse(), 5)
+
+
+def test_make_chunks_rejects_zero_hours(dataset):
+    with pytest.raises(ValueError):
+        chunk_sender.make_chunks(chunk_sender.load_year3(), chunk_hours=0)
 
 
 # --- main, dry run ----------------------------------------------------------
@@ -117,6 +169,19 @@ def test_days_limits_output_and_sleeps_between_days(dataset, monkeypatch, capsys
     sleeps = run_main(monkeypatch, "--dry-run", "--days", "2", "--interval", "1.5")
     assert len(capsys.readouterr().out.splitlines()) == 2 * len(MACHINES)
     assert sleeps == [1.5]  # one pause between two days, none after the last
+
+
+def test_cli_options_combine(dataset, monkeypatch, capsys):
+    run_main(monkeypatch, "--dry-run", "--machines", "M002", "--start", "2014-01-15", "--end", "2014-01-15",
+             "--chunk-hours", "12")
+    chunks = [json.loads(line)["records"] for line in capsys.readouterr().out.splitlines()]
+    assert [len(c) for c in chunks] == [12, 12]
+    assert {r["machine_id"] for c in chunks for r in c} == {"M002"}
+
+
+def test_cli_errors_when_nothing_matches(dataset, monkeypatch):
+    with pytest.raises(SystemExit):
+        run_main(monkeypatch, "--dry-run", "--start", "2020-01-01")
 
 
 # --- post_chunk ---------------------------------------------------------------
@@ -169,4 +234,4 @@ def test_main_posts_every_chunk(dataset, server, monkeypatch, capsys):
 
     assert len(received) == 3 * len(MACHINES)
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "2014-01-14 M001: 24 records -> 202"
+    assert lines[0] == "2014-01-14T00:00:00 M001: 24 records -> 202"
