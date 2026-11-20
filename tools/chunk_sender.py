@@ -63,7 +63,7 @@ def select(
             raise ValueError(f"unknown machine(s): {', '.join(sorted(unknown))}")
         df = df.filter(pl.col("machine_id").is_in(machines))
 
-    first_day = start or df["timestamp"].min().date()
+    first_day: date = start or df.select(pl.col("timestamp").min().dt.date()).item()
     lower = datetime.combine(first_day, datetime.min.time())
     upper = datetime.combine(end, datetime.min.time()) + timedelta(days=1) if end else None
     if days is not None:
@@ -143,7 +143,7 @@ def main() -> None:
                 first = records[0]
                 print(f"{first['timestamp']} {first['machine_id']}: {len(records)} records -> {status}")
 
-        if i < len(windows) - 1:
+        if not args.dry_run and i < len(windows) - 1:
             time.sleep(args.interval)
 
 

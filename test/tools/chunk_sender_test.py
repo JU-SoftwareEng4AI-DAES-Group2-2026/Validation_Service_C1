@@ -165,10 +165,10 @@ def test_missing_temperature_is_sent_as_null(dataset, monkeypatch, capsys):
     assert day2 and all(r["temperature"] is None for c in day2 for r in c["records"])
 
 
-def test_days_limits_output_and_sleeps_between_days(dataset, monkeypatch, capsys):
+def test_days_limits_output_and_dry_run_does_not_sleep(dataset, monkeypatch, capsys):
     sleeps = run_main(monkeypatch, "--dry-run", "--days", "2", "--interval", "1.5")
     assert len(capsys.readouterr().out.splitlines()) == 2 * len(MACHINES)
-    assert sleeps == [1.5]  # one pause between two days, none after the last
+    assert sleeps == []
 
 
 def test_cli_options_combine(dataset, monkeypatch, capsys):
@@ -230,8 +230,9 @@ def test_post_chunk_reports_unreachable_server_without_raising():
 
 def test_main_posts_every_chunk(dataset, server, monkeypatch, capsys):
     url, received, _ = server
-    run_main(monkeypatch, "--url", url, "--interval", "0")
+    sleeps = run_main(monkeypatch, "--url", url, "--interval", "1.5")
 
     assert len(received) == 3 * len(MACHINES)
+    assert sleeps == [1.5, 1.5]  # between the 3 windows, none after the last
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "2014-01-14T00:00:00 M001: 24 records -> 202"
