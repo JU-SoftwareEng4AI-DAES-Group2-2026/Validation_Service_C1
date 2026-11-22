@@ -1,4 +1,4 @@
-"""M1 contract tests using small observations and temporary CSV files."""
+"""M1 contract tests using small observations and temporary CSV/Parquet files."""
 
 import csv
 import io
@@ -17,6 +17,7 @@ from validation_service_c1.data_validation import (
     TRAINING_TARGET_COLUMNS,
     SensorObservation,
     read_sensor_csv,
+    read_sensor_parquet,
     select_ml_features,
 )
 
@@ -195,3 +196,63 @@ def test_feature_selection_requires_every_feature(observation: dict) -> None:
     frame = pl.DataFrame([observation]).drop("power")
     with pytest.raises(pl.exceptions.ColumnNotFoundError):
         select_ml_features(frame)
+
+
+@pytest.mark.parametrize("typed_timestamp", [False, True])
+def test_parquet_validation_preserves_rows_and_labels(
+    tmp_path: Path, observation: dict, typed_timestamp: bool
+) -> None:
+    path = tmp_path / "sensors.parquet"
+    row = {**observation, "anomaly": False, "important_features": "vibration,rpm"}
+    if typed_timestamp:
+        row["timestamp"] = datetime(2012, 1, 14)
+    data = pl.DataFrame([row, {**row, "temperature": None}])
+    data.write_parquet(path)
+    original = path.read_bytes()
+
+    result = read_sensor_parquet(path)
+
+    assert result.shape == data.shape
+    assert result.columns == data.columns
+    assert result["timestamp"].to_list() == [datetime(2012, 1, 14)] * 2
+    assert result["temperature"].to_list() == [46.1, None]
+    assert result["rpm"].dtype == pl.Float64
+    assert result["rpm"].to_list() == [2188.4] * 2
+    assert result["anomaly"].dtype == pl.Boolean
+    assert result["anomaly"].to_list() == [False, False]
+    assert result["important_features"].to_list() == ["vibration,rpm"] * 2
+    assert select_ml_features(result).columns == list(ML_FEATURE_COLUMNS)
+    assert path.read_bytes() == original
+
+
+def test_parquet_invalid_observation_reports_row(
+    tmp_path: Path, observation: dict
+) -> None:
+    path = tmp_path / "invalid.parquet"
+    pl.DataFrame([observation, {**observation, "rpm": "broken"}]).write_parquet(path)
+    with pytest.raises(
+        ValueError,
+        match="Parquet row 2:.*",
+    ):
+        read_sensor_parquet(path)
+
+
+def test_parquet_requires_columns_even_when_empty(
+    tmp_path: Path, observation: dict
+) -> None:
+    path = tmp_path / "missing.parquet"
+    pl.DataFrame([observation]).drop("power").head(0).write_parquet(path)
+    with pytest.raises(ValueError, match="missing required columns:.*power"):
+        read_sensor_parquet(path)
+
+
+def test_empty_parquet_has_typed_runtime_columns(
+    tmp_path: Path, observation: dict
+) -> None:
+    path = tmp_path / "empty.parquet"
+    pl.DataFrame([{**observation, "anomaly": False}]).head(0).write_parquet(path)
+    result = read_sensor_parquet(path)
+    assert result.height == 0
+    assert result.schema["timestamp"] == pl.Datetime("us")
+    assert result.schema["temperature"] == pl.Float64
+    assert result.schema["anomaly"] == pl.Boolean

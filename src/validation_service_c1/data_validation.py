@@ -90,6 +90,42 @@ def select_ml_features(data: pl.DataFrame) -> pl.DataFrame:
     return data.select(ML_FEATURE_COLUMNS)
 
 
+def read_sensor_parquet(path: str | Path) -> pl.DataFrame:
+    """Read Parquet with the same runtime validation as CSV.
+
+    Missing measurements remain null for M2. Extra columns retain their native
+    Parquet types, including training labels. Invalid observations raise an error
+    with a one-based row number; no rows are dropped or source files modified.
+    """
+    data = pl.read_parquet(path)
+    missing = set(SensorObservation.model_fields) - set(data.columns)
+    if missing:
+        raise ValueError(f"Parquet is missing required columns: {sorted(missing)}")
+
+    records = []
+    for row_number, record in enumerate(
+        data.select(list(SensorObservation.model_fields)).iter_rows(named=True), start=1
+    ):
+        try:
+            records.append(SensorObservation.model_validate(record).model_dump())
+        except ValueError as exc:
+            raise ValueError(f"Parquet row {row_number}: {exc}") from exc
+
+    schema = {
+        "machine_id": pl.String,
+        "operating_mode": pl.String,
+        **{name: pl.Float64 for name in ML_FEATURE_COLUMNS[1:]},
+    }
+    if not records:
+        schema["timestamp"] = pl.Datetime("us")
+        validated = pl.DataFrame(schema=schema)
+    else:
+        validated = pl.from_dicts(
+            records, infer_schema_length=None, schema_overrides=schema
+        )
+    return data.with_columns(validated.get_columns())
+
+
 def read_sensor_csv(path: str | Path) -> pl.DataFrame:
     """Read and validate ordinary or additionally quoted CSV observations.
 
