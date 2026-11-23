@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.14.3",
+    "polars>=2.1.0",
 ]
 
 [build-system]
@@ -17,6 +18,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "polars>=2.1.0",
     "pytest>=9.2.0",
+    "ruff>=0.17.6",
+    "ty>=0.0.108",
 ]
