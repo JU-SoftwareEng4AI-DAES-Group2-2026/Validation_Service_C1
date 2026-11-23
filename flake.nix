@@ -27,12 +27,12 @@
 
   outputs =
     {
-      nixpkgs,
-      nixpkgs-unstable,
-      pyproject-nix,
-      uv2nix,
-      pyproject-build-systems,
-      ...
+    nixpkgs,
+    nixpkgs-unstable,
+    pyproject-nix,
+    uv2nix,
+    pyproject-build-systems,
+    ...
     }:
     let
       inherit (nixpkgs) lib;
@@ -54,19 +54,19 @@
           pkgs = nixpkgs.legacyPackages.${system};
           python = pkgs.python312;
         in
-        (pkgs.callPackage pyproject-nix.build.packages {
-          inherit python;
-        }).overrideScope
-          (
-            lib.composeManyExtensions [
-              pyproject-build-systems.overlays.wheel
-              overlay
-            ]
-          )
+          (pkgs.callPackage pyproject-nix.build.packages {
+            inherit python;
+          }).overrideScope
+        (
+          lib.composeManyExtensions [
+            pyproject-build-systems.overlays.wheel
+            overlay
+          ]
+        )
       );
 
     in
-    {
+      {
       devShells = forAllSystems (
         system:
         let
@@ -75,24 +75,27 @@
           pythonSet = pythonSets.${system}.overrideScope editableOverlay;
           virtualenv = pythonSet.mkVirtualEnv "validation-service-c1-env" workspace.deps.all;
         in
-        {
+          {
           default = pkgs.mkShell {
             packages = [
               virtualenv
             ] ++ (with pkgs; [
-              uv
-              act
-              dvc
+                prek
+                ruff
+                ty
+
+                act
+                dvc
 
 
-              opentofu 
-              tflint 
+                opentofu
+                tflint
 
 
-            ]) ++ (with pkgsUnstable; [
-              azure-cli
-
-            ]);
+              ]) ++ (with pkgsUnstable; [
+                azure-cli
+                uv
+              ]);
             env = {
               UV_NO_SYNC = "1";
               UV_PYTHON = pythonSet.python.interpreter;
@@ -101,7 +104,7 @@
             shellHook = ''
               unset PYTHONPATH
               export REPO_ROOT=$(git rev-parse --show-toplevel)
-            '';
+              '';
           };
         }
       );
@@ -111,4 +114,3 @@
       });
     };
 }
-
