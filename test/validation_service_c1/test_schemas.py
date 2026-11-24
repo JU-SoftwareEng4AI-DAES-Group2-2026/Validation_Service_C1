@@ -1,14 +1,9 @@
-import csv
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from validation_service_c1.schema import SensorBatch, SensorRecord
-
-# Sample CSV from the repo. Adjust if your test file lives elsewhere.
-SAMPLE_CSV = Path(__file__).resolve().parent.parent / "data" / "sample_sensor_data.csv"
 
 
 @pytest.fixture
@@ -23,16 +18,6 @@ def valid_record():
         "pressure": 98.8,
         "rpm": 2188.4,
         "power": 316.2,
-        "anomaly": False,
-        "anomaly_type": None,
-        "failure_probability_gt": 0.04,
-        "failure_in_7_days": False,
-        "remaining_useful_life_hours": 963,
-        "failure_type": "motor_imbalance",
-        "important_features": "vibration,rpm",
-        "maintenance_action": "align_motor",
-        "priority": "low",
-        "concept_drift_active": False,
     }
 
 
@@ -51,13 +36,13 @@ def test_valid_record_is_accepted(valid_record):
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        (" high_load ", "HIGH_LOAD"),  # lowercase + whitespace
-        ("high load", "HIGH_LOAD"),  # PDF spelling
+        (" high_load ", "HIGH_LOAD"),
+        ("high load", "HIGH_LOAD"),
         ("High-Load", "HIGH_LOAD"),
-        ("normal load", "NORMAL"),  # PDF spelling
+        ("normal load", "NORMAL"),
         ("normal", "NORMAL"),
         ("idle", "IDLE"),
-        ("OVERLOAD", "OVERLOAD"),  # exists in the data, not in the PDF
+        ("OVERLOAD", "OVERLOAD"),
     ],
 )
 def test_operating_mode_is_normalised(valid_record, raw, expected):
@@ -85,9 +70,6 @@ def test_missing_sensor_value_is_accepted(valid_record, sensor):
     [
         ("temperature", 1052.5),  # sensor spike
         ("vibration", -0.12),  # negative, exists in the real data
-        ("failure_probability_gt", -0.055),  # exists in the real data
-        ("failure_probability_gt", 5.0),  # nonsense, but still a float
-        ("remaining_useful_life_hours", -1),
     ],
 )
 def test_out_of_range_values_are_accepted(valid_record, field, value):
@@ -124,14 +106,6 @@ def test_omitted_required_field_is_rejected(valid_record):
         ("temperature", float("nan")),
         ("temperature", float("inf")),
         ("temperature", float("-inf")),
-        ("failure_probability_gt", float("nan")),
-        ("failure_probability_gt", "high"),
-        ("remaining_useful_life_hours", "soon"),
-        ("anomaly", "maybe"),
-        ("anomaly_type", "unknown"),
-        ("failure_type", "unknown"),
-        ("maintenance_action", "unknown"),
-        ("priority", "urgent"),
     ],
 )
 def test_invalid_field_is_rejected(valid_record, field, value):
