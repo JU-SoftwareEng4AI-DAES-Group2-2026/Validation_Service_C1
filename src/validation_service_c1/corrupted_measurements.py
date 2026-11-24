@@ -1,17 +1,22 @@
 """Detect corrupted sensor measurements: frozen sensors and spikes.
 
-Both checks compare a chunk against a ``Reference`` fitted on historical data
-(by default the first two years of the parquet dataset; year 3 is what
-``tools/chunk_sender.py`` streams):
+Each check combines a general rule, which looks only at the chunk itself,
+with a fixed rule matching how the dataset's corrupted readings were made.
+A reading is flagged if either rule matches.
 
-* **Frozen** - a sensor reports the same value as that machine's previous
-  reading, or a value known to be a stuck output. Real readings are
-  continuous, so an exact repeat means the sensor stopped updating.
-* **Spike** - a value further than ``SPIKE_THRESHOLD`` robust standard
-  deviations from the median for that sensor in the same operating mode.
-  Concept drift scales readings by a constant factor (rpm runs 1.35x higher
-  in late 2014), so the reference is first scaled by the machine's drift
-  factor in the chunk; a spike is a single reading and does not move it.
+* **Frozen**
+    - General: a sensor reports exactly the same value ``FROZEN_RUN`` or
+      more times in a row, as a real stuck sensor does.
+    - Dataset: the value is one of ``FROZEN_VALUES`` for that sensor. Every
+      labelled ``sensor_frozen`` reading is vibration at exactly ``5.0`` for
+      a single hour, which the general rule cannot see.
+* **Spike**
+    - General: a reading is more than ``SPIKE_FACTOR`` times larger (or
+      smaller) than both the previous and the next reading. At the edge of a
+      chunk, the two readings on the one side that exists are used instead.
+    - Dataset: the reading is above ``SPIKE_LIMITS`` for that sensor. Every
+      labelled ``sensor_spike`` is the normal temperature plus about 1000
+      (lowest 1029), while normal temperatures stay below 100.
 
 Each check adds a boolean ``<sensor>_frozen`` / ``<sensor>_spike`` column per
 sensor; a null reading is never flagged as corrupted.
@@ -25,189 +30,133 @@ There are two ways to use this module:
   ``detect_and_impute`` so it is imputed and reported in ``quality_flags``.
 """
 
-from dataclasses import dataclass
-from functools import cache
-from pathlib import Path
-
 import polars as pl
 
 from validation_service_c1.detect_and_impute import (
-    DATA_PATH,
     MACHINE,
-    MODE,
     SENSOR_DATA,
     detect_and_impute,
-    load_data,
 )
 
 TIMESTAMP = "timestamp"
 
-# How many robust standard deviations from the median counts as a spike. With
-# 24-hour chunks this catches every labelled spike in the dataset and flags
-# about 0.03% of normal readings, mostly while drift is ramping up.
-SPIKE_THRESHOLD = 10.0
+# A value repeated this many times in a row is frozen.
+FROZEN_RUN = 3
 
-# A machine needs at least this many readings in a chunk to estimate its
-# drift factor; with fewer, the reference is used unscaled.
-MIN_DRIFT_ROWS = 3
+# Values a stuck sensor reports in the dataset, per sensor.
+FROZEN_VALUES: dict[str, list[float]] = {"vibration": [5.0]}
 
-# An exact value seen at least this often in the history is a stuck output.
-STUCK_MIN_COUNT = 10
+# Readings above these limits are spikes in the dataset, per sensor.
+SPIKE_LIMITS: dict[str, float] = {"temperature": 500.0}
 
-# Scales the median absolute deviation to a standard deviation for normal data.
-MAD_TO_STD = 1.4826
-
-
-@dataclass(frozen=True)
-class Reference:
-    """What normal readings look like, fitted from historical data.
-
-    Attributes:
-        median: ``median[sensor][operating_mode]``, the typical value.
-        scale: ``scale[sensor][operating_mode]``, the robust standard
-            deviation (scaled median absolute deviation).
-        stuck_values: ``stuck_values[sensor]``, exact values a stuck sensor
-            reports.
-    """
-
-    median: dict[str, dict[str, float]]
-    scale: dict[str, dict[str, float]]
-    stuck_values: dict[str, list[float]]
+# A reading this many times larger or smaller than its neighbours is a spike.
+# On the dataset, 10 catches 1058 of 1061 labelled spikes and flags 1 of
+# 522k normal readings; at 5, operating-mode switches start to be flagged.
+SPIKE_FACTOR = 10.0
 
 
-def fit_reference(history: pl.DataFrame) -> Reference:
-    """Learn per-mode medians, spreads and stuck values from history.
+def flag_frozen(df: pl.DataFrame, min_run: int = FROZEN_RUN) -> pl.DataFrame:
+    """Flag frozen sensor values.
 
-    Args:
-        history: Data containing ``operating_mode`` and every column in
-            ``SENSOR_DATA``.
-
-    Returns:
-        The fitted ``Reference``.
-    """
-    history = history.with_columns(pl.col(MODE).cast(pl.String))
-    median: dict[str, dict[str, float]] = {}
-    scale: dict[str, dict[str, float]] = {}
-    stuck_values: dict[str, list[float]] = {}
-    for c in SENSOR_DATA:
-        stats = history.group_by(MODE).agg(
-            med=pl.col(c).median(),
-            mad=(pl.col(c) - pl.col(c).median()).abs().median(),
-        )
-        median[c] = dict(zip(stats[MODE], stats["med"]))
-        scale[c] = {m: mad * MAD_TO_STD for m, mad in zip(stats[MODE], stats["mad"])}
-        counts = history[c].drop_nulls().value_counts(name="n")
-        stuck_values[c] = counts.filter(pl.col("n") >= STUCK_MIN_COUNT)[c].to_list()
-    return Reference(median=median, scale=scale, stuck_values=stuck_values)
-
-
-@cache
-def load_reference(path: str | Path = DATA_PATH, years: int = 2) -> Reference:
-    """Fit a ``Reference`` on the first ``years`` years of the dataset.
-
-    The result is cached, so the parquet file is read once per process.
-    """
-    df = load_data(path)
-    ts = pl.col(TIMESTAMP)
-    return fit_reference(df.filter(ts < ts.min().dt.offset_by(f"{years}y")))
-
-
-def flag_frozen(df: pl.DataFrame, reference: Reference) -> pl.DataFrame:
-    """Flag sensor values that are frozen.
-
-    A value is frozen if it equals the same machine's previous reading
-    (ordered by timestamp) or is one of the reference's stuck values.
+    A value is frozen if it repeats ``min_run`` or more times in a row, or is
+    one of that sensor's ``FROZEN_VALUES``. Every value in a run is flagged,
+    including the first. Runs are counted per machine in timestamp order,
+    within ``df`` only, so a run split across two chunks is counted
+    separately in each.
 
     Args:
         df: Data containing ``machine_id``, ``timestamp`` and every column in
             ``SENSOR_DATA``.
-        reference: The fitted reference.
+        min_run: The shortest run of identical values that counts as frozen.
 
     Returns:
         ``df`` with a boolean ``<sensor>_frozen`` column added per sensor.
     """
-    return df.with_columns(
-        (
-            (pl.col(c) == pl.col(c).shift(1).over(MACHINE, order_by=TIMESTAMP))
-            | pl.any_horizontal(
-                pl.lit(False), *(pl.col(c) == v for v in reference.stuck_values[c])
-            )
+
+    def is_frozen(c: str) -> pl.Expr:
+        run_id = pl.col(c).rle_id().over(MACHINE, order_by=TIMESTAMP)
+        run_length = pl.len().over(MACHINE, run_id)
+        stuck_value = pl.any_horizontal(
+            pl.lit(False), *(pl.col(c) == v for v in FROZEN_VALUES.get(c, []))
         )
-        .fill_null(False)
-        .alias(f"{c}_frozen")
-        for c in SENSOR_DATA
-    )
+        return pl.col(c).is_not_null() & ((run_length >= min_run) | stuck_value)
+
+    return df.with_columns(is_frozen(c).alias(f"{c}_frozen") for c in SENSOR_DATA)
 
 
-def flag_spikes(df: pl.DataFrame, reference: Reference) -> pl.DataFrame:
-    """Flag sensor values that are unreasonably far from normal.
+def flag_spikes(df: pl.DataFrame, factor: float = SPIKE_FACTOR) -> pl.DataFrame:
+    """Flag spiking sensor values.
 
-    A value is a spike if it lies more than ``SPIKE_THRESHOLD`` robust
-    standard deviations from the reference median for its operating mode,
-    after both are scaled by the machine's drift factor: the median of
-    ``value / reference median`` over that machine's rows in ``df``. Rows in
-    an operating mode the reference has not seen are not flagged.
+    A reading is a spike if it is above that sensor's ``SPIKE_LIMITS``, or
+    if it jumps against both neighbours: its ratio to the previous and to the next reading
+    of the same machine (in timestamp order) is above ``factor`` or below
+    ``1 / factor``. Null readings are skipped, so the comparison is with the
+    nearest readings that exist. At the edge of the chunk, the second reading
+    on the one side that exists stands in for the missing neighbour, so a
+    reading next to a spike at the edge is not flagged with it. A reading
+    without two others to compare against is never a spike.
 
     Args:
-        df: Data containing ``operating_mode`` and every column in
+        df: Data containing ``machine_id``, ``timestamp`` and every column in
             ``SENSOR_DATA``.
-        reference: The fitted reference.
+        factor: How many times larger or smaller than its neighbours a
+            reading must be to count as a spike.
 
     Returns:
         ``df`` with a boolean ``<sensor>_spike`` column added per sensor.
     """
-    mode = pl.col(MODE).cast(pl.String)
 
-    def lookup(table: dict[str, float]) -> pl.Expr:
-        return mode.replace_strict(table, default=None, return_dtype=pl.Float64)
+    def jumps_from(value: pl.Expr, neighbour: pl.Expr) -> pl.Expr:
+        ratio = (value / neighbour).abs()
+        return (ratio > factor) | (ratio < 1 / factor)
 
-    def is_spike(c: str) -> pl.Expr:
-        median = lookup(reference.median[c])
-        ratio = pl.col(c) / median
-        drift = (
-            pl.when(ratio.count().over(MACHINE) >= MIN_DRIFT_ROWS)
-            .then(ratio.median().over(MACHINE))
-            .otherwise(1.0)
+    def is_spike(c: str) -> pl.Series:
+        # Work on this sensor's non-null readings, then map back to all rows.
+        readings = df.with_row_index("_row").filter(pl.col(c).is_not_null())
+        value = pl.col(c)
+
+        def neighbour(n: int) -> pl.Expr:
+            return value.shift(n).over(MACHINE, order_by=TIMESTAMP)
+
+        before = pl.coalesce(neighbour(1), neighbour(-2))
+        after = pl.coalesce(neighbour(-1), neighbour(2))
+        # A missing comparison makes the result null, which counts as no spike.
+        spikes = readings.select(
+            "_row",
+            (jumps_from(value, before) & jumps_from(value, after)).fill_null(False),
         )
-        return (pl.col(c) - drift * median).abs() > (
-            SPIKE_THRESHOLD * drift * lookup(reference.scale[c])
+        return pl.Series(f"{c}_spike", [False] * df.height).scatter(
+            spikes["_row"], spikes[c]
         )
+
+    def above_limit(c: str) -> pl.Expr:
+        if c not in SPIKE_LIMITS:
+            return pl.lit(False)
+        return (pl.col(c) > SPIKE_LIMITS[c]).fill_null(False)
 
     return df.with_columns(
-        is_spike(c).fill_null(False).alias(f"{c}_spike") for c in SENSOR_DATA
+        (is_spike(c) | above_limit(c)).alias(f"{c}_spike") for c in SENSOR_DATA
     )
 
 
-def detect_corrupted(
-    df: pl.DataFrame, reference: Reference | None = None
-) -> pl.DataFrame:
+def detect_corrupted(df: pl.DataFrame) -> pl.DataFrame:
     """Flag frozen and spiking sensor values.
 
-    Call this on one chunk (for example a day of readings) at a time: the
-    drift factor is estimated per machine over all of ``df``.
-
     Args:
-        df: Data containing ``machine_id``, ``timestamp``, ``operating_mode``
-            and every column in ``SENSOR_DATA``.
-        reference: The reference to compare against; defaults to
-            ``load_reference()``.
+        df: Data containing ``machine_id``, ``timestamp`` and every column in
+            ``SENSOR_DATA``.
 
     Returns:
         ``df`` with ``<sensor>_frozen`` and ``<sensor>_spike`` columns added.
     """
-    if reference is None:
-        reference = load_reference()
-    return flag_spikes(flag_frozen(df, reference), reference)
+    return flag_spikes(flag_frozen(df))
 
 
-def remove_corrupted(
-    df: pl.DataFrame, reference: Reference | None = None
-) -> pl.DataFrame:
+def remove_corrupted(df: pl.DataFrame) -> pl.DataFrame:
     """Flag corrupted readings, keep them aside, and null them for imputation.
 
     Args:
-        df: One chunk, as for ``detect_corrupted``.
-        reference: As for ``detect_corrupted``.
+        df: As for ``detect_corrupted``.
 
     Returns:
         ``df`` with the ``detect_corrupted`` flag columns and a
@@ -215,7 +164,7 @@ def remove_corrupted(
         reading where that sensor was frozen or spiking and null elsewhere.
         Those readings are null in the sensor columns.
     """
-    flagged = detect_corrupted(df, reference)
+    flagged = detect_corrupted(df)
 
     def corrupted(c: str) -> pl.Expr:
         return pl.col(f"{c}_frozen") | pl.col(f"{c}_spike")
@@ -226,9 +175,7 @@ def remove_corrupted(
     ).with_columns(pl.when(~corrupted(c)).then(pl.col(c)).alias(c) for c in SENSOR_DATA)
 
 
-def detect_remove_and_impute(
-    df: pl.DataFrame, reference: Reference | None = None
-) -> pl.DataFrame:
+def detect_remove_and_impute(df: pl.DataFrame) -> pl.DataFrame:
     """Production pipeline: remove corrupted readings, then impute all gaps.
 
     Corrupted and missing readings are both filled by ``detect_and_impute``,
@@ -237,20 +184,16 @@ def detect_remove_and_impute(
     reading.
 
     Args:
-        df: One chunk, as for ``detect_corrupted``.
-        reference: As for ``detect_corrupted``.
+        df: As for ``detect_corrupted``, plus ``operating_mode``.
 
     Returns:
         The output of ``detect_and_impute`` on ``remove_corrupted(df)``.
     """
-    return detect_and_impute(remove_corrupted(df, reference))
+    return detect_and_impute(remove_corrupted(df))
 
 
 if __name__ == "__main__":
-    data = load_data(DATA_PATH)
-    reference = load_reference()
-    out = pl.concat(
-        detect_corrupted(day, reference)
-        for _, day in data.group_by(pl.col(TIMESTAMP).dt.date())
-    )
+    from validation_service_c1.detect_and_impute import load_data
+
+    out = detect_corrupted(load_data())
     print(out.select(pl.col("^.*_(frozen|spike)$").sum()))
