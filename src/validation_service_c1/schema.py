@@ -34,42 +34,6 @@ class SensorRecord(BaseModel):
     pressure: float | None
     rpm: float | None
     power: float | None
-    anomaly: bool
-
-    # None represents no anomaly type, for example when anomaly is False.
-    anomaly_type: (
-        Literal[
-            "sensor_spike",
-            "sensor_frozen",
-            "missing_value",
-        ]
-        | None
-    )
-
-    failure_probability_gt: float
-    failure_in_7_days: bool
-    remaining_useful_life_hours: int
-
-    failure_type: Literal[
-        "bearing_failure",
-        "cooling_failure",
-        "pressure_leak",
-        "motor_imbalance",
-    ]
-
-    important_features: str
-
-    # Accept only the maintenance actions listed in the issue.
-    maintenance_action: Literal[
-        "replace_bearing",
-        "repair_cooling_system",
-        "replace_valve",
-        "align_motor",
-    ]
-
-    # Restrict priority to the three permitted categories.
-    priority: Literal["high", "medium", "low"]
-    concept_drift_active: bool
 
     @field_validator("operating_mode", mode="before")
     @classmethod
