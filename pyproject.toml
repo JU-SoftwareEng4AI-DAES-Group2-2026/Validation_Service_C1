@@ -4,12 +4,18 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
-    { name = "Figure26", email = "mikael.skaremyr.te1@hotmail.com" }
+    { name = "Group 2 - Team 1 - Project Component 1" }
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.165.0",
+    "fastexcel>=0.21.0",
+    "httpx>=0.28.1",
+    "httpx2>=2.16.2",
+    "numpy>=2.5.4",
     "polars>=2.1.0",
     "pydantic>=2.14.3",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]
@@ -18,6 +24,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "polars>=2.1.0",
     "pytest>=9.2.0",
     "ruff>=0.17.5",
 ]
