@@ -2,10 +2,10 @@
 
 The pipeline counts nulls in the sensor columns, flags each missing value in a
 ``<sensor>_imputed`` column, and fills the gaps with a per-machine median
-computed from the same chunk of data.
+computed from the same chunk of data. A ``quality_flags`` column then lists,
+per row, each sensor value that was missing and what was done about it.
 """
 
-import io
 from pathlib import Path
 
 import polars as pl
@@ -16,6 +16,9 @@ SENSOR_DATA = ["temperature", "vibration", "pressure", "rpm", "power"]
 # Columns that identify which readings a missing value is filled from.
 MACHINE = "machine_id"
 MODE = "operating_mode"
+
+# The dataset in the repository root.
+DATA_PATH = Path(__file__).resolve().parents[2] / "predictive_maintenance_data.parquet"
 
 
 def detect(df: pl.DataFrame) -> pl.DataFrame:
@@ -75,6 +78,65 @@ def impute(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def quality_flags(df: pl.DataFrame) -> pl.DataFrame:
+    """Describe each row's imputed sensor values in a ``quality_flags`` column.
+
+    Call this after ``flag_missing`` and ``impute``. The column is a list of
+    structs that serialises directly to the output JSON, e.g.::
+
+        [{"sensor": "temperature", "issue": "missing_value",
+          "action": "imputed", "original_value": null}]
+
+    Rows with no imputed values get an empty list.
+
+    If ``corrupted_measurements.remove_corrupted`` ran first, the
+    ``<sensor>_spike`` / ``<sensor>_frozen`` and ``<sensor>_original``
+    columns are present. A value it removed is then reported as
+    ``"sensor_spike"`` or ``"sensor_frozen"`` with the removed reading as
+    ``original_value``. Without those columns every imputed value is a
+    ``"missing_value"``.
+
+    Args:
+        df: Imputed data with the ``<sensor>_imputed`` columns from
+            ``flag_missing``.
+
+    Returns:
+        ``df`` with a ``quality_flags`` column added. ``action`` is
+        ``"imputed"`` if the value was filled in and ``"not_imputed"`` if it
+        is still null.
+    """
+
+    def optional(name: str, default: pl.Expr) -> pl.Expr:
+        return pl.col(name) if name in df.columns else default
+
+    def issue(c: str) -> pl.Expr:
+        no = pl.lit(False)
+        return (
+            pl.when(optional(f"{c}_spike", no))
+            .then(pl.lit("sensor_spike"))
+            .when(optional(f"{c}_frozen", no))
+            .then(pl.lit("sensor_frozen"))
+            .otherwise(pl.lit("missing_value"))
+        )
+
+    flags = [
+        pl.when(pl.col(f"{c}_imputed")).then(
+            pl.struct(
+                sensor=pl.lit(c),
+                issue=issue(c),
+                action=pl.when(pl.col(c).is_not_null())
+                .then(pl.lit("imputed"))
+                .otherwise(pl.lit("not_imputed")),
+                original_value=optional(
+                    f"{c}_original", pl.lit(None, dtype=pl.Float64)
+                ),
+            )
+        )
+        for c in SENSOR_DATA
+    ]
+    return df.with_columns(quality_flags=pl.concat_list(flags).list.drop_nulls())
+
+
 def detect_and_impute(df: pl.DataFrame) -> pl.DataFrame:
     """Run the full detect-and-impute pipeline.
 
@@ -82,35 +144,31 @@ def detect_and_impute(df: pl.DataFrame) -> pl.DataFrame:
         df: Data containing every column in ``SENSOR_DATA``.
 
     Returns:
-        ``df`` with ``<sensor>_imputed`` flag columns added and the missing
-        sensor values filled in.
+        ``df`` with ``<sensor>_imputed`` flag columns and a ``quality_flags``
+        column added, and the missing sensor values filled in.
     """
     detect(df)
-    imputed_df = impute(flag_missing(df))
+    imputed_df = quality_flags(impute(flag_missing(df)))
     detect(imputed_df)
     return imputed_df
 
 
-def load_data(path: str | Path) -> pl.DataFrame:
-    """Load the predictive-maintenance dataset from an .xlsx file.
-
-    The workbook stores CSV text in a single column (the header line is the
-    column name), so the rows are joined back into CSV text and parsed.
+def load_data(path: str | Path = DATA_PATH) -> pl.DataFrame:
+    """Load the predictive-maintenance dataset from a parquet file.
 
     Args:
-        path: Path to the .xlsx file.
+        path: Path to the parquet file; defaults to the dataset in the repo
+            root.
 
     Returns:
-        The parsed data, with date columns converted to datetimes.
+        The data, with ``machine_id`` and ``operating_mode`` as strings (the
+        same type the API receives) instead of categoricals.
     """
-    raw = pl.read_excel(path)
-    header = raw.columns[0]
-    text = header + "\n" + "\n".join(raw[header].to_list())
-    return pl.read_csv(io.StringIO(text), try_parse_dates=True)
+    return pl.read_parquet(path).with_columns(pl.col(MACHINE, MODE).cast(pl.String))
 
 
 # For testing purposes, this file can be executed on its own
-# with the provided xlsx sheet in the working directory
 if __name__ == "__main__":
-    df = load_data("predictive_maintenance_data.xlsx")
-    detect_and_impute(df)
+    df = load_data()
+    print(detect(df))
+    print(detect(detect_and_impute(df)))
