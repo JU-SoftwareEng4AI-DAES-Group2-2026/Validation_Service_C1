@@ -1,4 +1,4 @@
-"""Tests for the F1 chunk endpoint (receive_chunks.py).
+"""Tests for the F1 chunk endpoint (api.py).
 
 These are API-level tests: requests go through the real FastAPI app in-process.
 M2's imputation maths is covered by detect_and_impute_test.py, so the tests here
@@ -10,8 +10,8 @@ called for invalid chunks and that an M2 crash is reported properly.
 import pytest
 from fastapi.testclient import TestClient
 
-from validation_service_c1 import receive_chunks
-from validation_service_c1.receive_chunks import app
+from validation_service_c1 import api
+from validation_service_c1.api import app
 
 client = TestClient(app)
 
@@ -124,7 +124,7 @@ def m2_must_not_run(monkeypatch):
     def boom(df):
         raise AssertionError("M2 was called for an invalid chunk")
 
-    monkeypatch.setattr(receive_chunks, "detect_and_impute", boom)
+    monkeypatch.setattr(api, "detect_and_impute", boom)
 
 
 def test_bad_operating_mode_is_rejected_with_location(m2_must_not_run):
@@ -222,7 +222,7 @@ def test_m2_crash_returns_500_with_description(monkeypatch):
     def boom(df):
         raise RuntimeError("imputer exploded")
 
-    monkeypatch.setattr(receive_chunks, "detect_and_impute", boom)
+    monkeypatch.setattr(api, "detect_and_impute", boom)
     response = post([make_record(0)])
     detail = response.json()["detail"]
 
