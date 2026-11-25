@@ -1,5 +1,7 @@
 import logging
+from contextlib import asynccontextmanager
 
+import httpx
 import polars as pl
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -10,7 +12,15 @@ from .schema import SensorBatch
 
 logger = logging.getLogger("uvicorn.error")
 
-app = FastAPI(title="F1 - Chunk Validation Service")
+
+@asynccontextmanager
+async def lifespan(fastapi: FastAPI):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        fastapi.state.http_client = client
+        yield
+
+
+app = FastAPI(title="F1 - Chunk Validation Service", lifespan=lifespan)
 
 # Explicit schema so a sensor that is entirely null in a chunk still becomes
 # Float64 (otherwise Polars infers a Null dtype and the median step breaks).
@@ -110,8 +120,13 @@ def receive_chunk(batch: SensorBatch) -> dict:
 
 
 @app.get("/health")
-def health() -> dict:
+async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("v1/model")
+async def get_deployed_model() -> dict:
+    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Not implemented yet")
 
 
 if __name__ == "__main__":
