@@ -12,7 +12,12 @@ import polars as pl
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "tools" / "chunk_sender.py"
+
 spec = importlib.util.spec_from_file_location("chunk_sender", SCRIPT)
+
+if spec is None or spec.loader is None:
+    raise ImportError(f"Could not load module from {SCRIPT}")
+
 chunk_sender = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(chunk_sender)
 
@@ -49,11 +54,15 @@ def dataset(tmp_path, monkeypatch):
         make_day(START)  # year 1, must be excluded
         + make_day(YEAR3_START - timedelta(days=1))  # last day of year 2, excluded
         + make_day(YEAR3_START)  # first day of year 3
-        + make_day(YEAR3_START + timedelta(days=1), temperature=None)  # year 3, missing temps
+        + make_day(
+            YEAR3_START + timedelta(days=1), temperature=None
+        )  # year 3, missing temps
         + make_day(YEAR3_END - timedelta(days=1))  # last day of year 3
         + make_day(YEAR3_END)  # first day of year 4, excluded
     )
-    df = pl.DataFrame(rows).with_columns(pl.col("machine_id", "operating_mode").cast(pl.Categorical))
+    df = pl.DataFrame(rows).with_columns(
+        pl.col("machine_id", "operating_mode").cast(pl.Categorical)
+    )
     path = tmp_path / "data.parquet"
     df.write_parquet(path)
     monkeypatch.setattr(chunk_sender, "DATA_PATH", path)
@@ -98,7 +107,9 @@ def test_select_rejects_unknown_machine(dataset):
 
 
 def test_select_date_range_is_inclusive(dataset):
-    df = chunk_sender.select(chunk_sender.load_year3(), start=date(2014, 1, 15), end=date(2015, 1, 13))
+    df = chunk_sender.select(
+        chunk_sender.load_year3(), start=date(2014, 1, 15), end=date(2015, 1, 13)
+    )
     days = df["timestamp"].dt.date().unique().sort().to_list()
     assert days == [date(2014, 1, 15), date(2015, 1, 13)]
 
@@ -114,14 +125,18 @@ def test_select_days_counts_from_start(dataset):
 def test_make_chunks_default_is_one_machine_day(dataset):
     windows = chunk_sender.make_chunks(chunk_sender.load_year3())
     assert len(windows) == 3
-    assert all(len(w) == len(MACHINES) and all(len(c) == 24 for c in w) for w in windows)
+    assert all(
+        len(w) == len(MACHINES) and all(len(c) == 24 for c in w) for w in windows
+    )
 
 
 def test_make_chunks_respects_chunk_hours(dataset):
     df = chunk_sender.select(chunk_sender.load_year3(), days=1)
     windows = chunk_sender.make_chunks(df, chunk_hours=6)
     assert len(windows) == 4
-    assert [c["timestamp"] for c in windows[1][0]] == [f"2014-01-14T{h:02d}:00:00" for h in range(6, 12)]
+    assert [c["timestamp"] for c in windows[1][0]] == [
+        f"2014-01-14T{h:02d}:00:00" for h in range(6, 12)
+    ]
 
 
 def test_make_chunks_formats_values_for_json(dataset):
@@ -155,7 +170,9 @@ def test_dry_run_sends_one_chunk_per_machine_per_day(dataset, monkeypatch, capsy
         assert {r["machine_id"] for r in records} == {records[0]["machine_id"]}
         assert {r["timestamp"][:10] for r in records} == {records[0]["timestamp"][:10]}
         assert list(records[0]) == chunk_sender.COLUMNS
-        assert [r["timestamp"] for r in records] == sorted(r["timestamp"] for r in records)
+        assert [r["timestamp"] for r in records] == sorted(
+            r["timestamp"] for r in records
+        )
 
 
 def test_missing_temperature_is_sent_as_null(dataset, monkeypatch, capsys):
@@ -172,9 +189,21 @@ def test_days_limits_output_and_dry_run_does_not_sleep(dataset, monkeypatch, cap
 
 
 def test_cli_options_combine(dataset, monkeypatch, capsys):
-    run_main(monkeypatch, "--dry-run", "--machines", "M002", "--start", "2014-01-15", "--end", "2014-01-15",
-             "--chunk-hours", "12")
-    chunks = [json.loads(line)["records"] for line in capsys.readouterr().out.splitlines()]
+    run_main(
+        monkeypatch,
+        "--dry-run",
+        "--machines",
+        "M002",
+        "--start",
+        "2014-01-15",
+        "--end",
+        "2014-01-15",
+        "--chunk-hours",
+        "12",
+    )
+    chunks = [
+        json.loads(line)["records"] for line in capsys.readouterr().out.splitlines()
+    ]
     assert [len(c) for c in chunks] == [12, 12]
     assert {r["machine_id"] for c in chunks for r in c} == {"M002"}
 
@@ -196,11 +225,13 @@ def server():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             length = int(self.headers["Content-Length"])
-            received.append({"path": self.path, "body": json.loads(self.rfile.read(length))})
+            received.append(
+                {"path": self.path, "body": json.loads(self.rfile.read(length))}
+            )
             self.send_response(state["status"])
             self.end_headers()
 
-        def log_message(self, *args):
+        def log_message(self, format: str, *args):
             pass
 
     httpd = HTTPServer(("127.0.0.1", 0), Handler)
