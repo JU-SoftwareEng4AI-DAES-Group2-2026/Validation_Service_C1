@@ -57,7 +57,9 @@ def test_runtime_conversion_without_training_labels(observation: dict) -> None:
 @pytest.mark.parametrize("mode", ["NORMAL", "HIGH_LOAD", "IDLE", "OVERLOAD"])
 def test_operating_modes(observation: dict, mode: str) -> None:
     assert (
-        SensorObservation(**{**observation, "operating_mode": mode}).operating_mode
+        SensorObservation.model_validate(
+            {**observation, "operating_mode": mode}
+        ).operating_mode
         == mode
     )
 
@@ -81,7 +83,7 @@ def test_operating_modes(observation: dict, mode: str) -> None:
 )
 def test_invalid_metadata(observation: dict, field: str, value: object) -> None:
     with pytest.raises(ValidationError) as error:
-        SensorObservation(**{**observation, field: value})
+        SensorObservation.model_validate({**observation, field: value})
     assert error.value.errors()[0]["loc"] == (field,)
 
 
@@ -89,7 +91,7 @@ def test_invalid_metadata(observation: dict, field: str, value: object) -> None:
 @pytest.mark.parametrize("value", ["broken", True, [], float("inf"), "-inf"])
 def test_invalid_measurements(observation: dict, field: str, value: object) -> None:
     with pytest.raises(ValidationError) as error:
-        SensorObservation(**{**observation, field: value})
+        SensorObservation.model_validate({**observation, field: value})
     assert error.value.errors()[0]["loc"] == (field,)
 
 
@@ -97,7 +99,7 @@ def test_invalid_measurements(observation: dict, field: str, value: object) -> N
 def test_required_fields(observation: dict, field: str) -> None:
     observation.pop(field)
     with pytest.raises(ValidationError) as error:
-        SensorObservation(**observation)
+        SensorObservation.model_validate(observation)
     assert error.value.errors()[0]["type"] == "missing"
     assert error.value.errors()[0]["loc"] == (field,)
 
@@ -105,14 +107,17 @@ def test_required_fields(observation: dict, field: str) -> None:
 @pytest.mark.parametrize("field", ML_FEATURE_COLUMNS[1:])
 @pytest.mark.parametrize("value", [None, "", "  ", float("nan"), "NaN"])
 def test_missing_measurements(observation: dict, field: str, value: object) -> None:
-    result = SensorObservation(**{**observation, field: value})
+    result = SensorObservation.model_validate({**observation, field: value})
     assert getattr(result, field) is None
 
 
 @pytest.mark.parametrize("value", [-1e12, 0, 1e12])
 def test_unusual_finite_values_are_preserved(observation: dict, value: float) -> None:
     assert (
-        SensorObservation(**{**observation, "temperature": value}).temperature == value
+        SensorObservation.model_validate(
+            {**observation, "temperature": value}
+        ).temperature
+        == value
     )
 
 
