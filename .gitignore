@@ -59,3 +59,4 @@ terraform.rc
 # End of https://www.toptal.com/developers/gitignore/api/terraform
 publish-profile.xml
 predictive_maintenance_data(in).csv
+modeling/.ipynb_checkpoints/modeling-checkpoint.ipynb
