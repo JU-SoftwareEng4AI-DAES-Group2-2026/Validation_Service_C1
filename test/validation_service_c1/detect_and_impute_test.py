@@ -12,6 +12,7 @@ from validation_service_c1.detect_and_impute import (
     flag_missing,
     impute,
     load_data,
+    quality_flags,
 )
 
 
@@ -132,24 +133,76 @@ def test_dai_flags_and_fills_missing_values(df):
     assert out.select(SENSOR_DATA).null_count().sum_horizontal().item() == 0
 
 
-def test_load_data_parses_csv_stored_in_one_column(monkeypatch):
-    """The header-as-column-name CSV text is rebuilt and parsed, dates included."""
-    sheet = pl.DataFrame(
+def test_quality_flags_lists_one_entry_per_imputed_sensor(df):
+    """Each row lists a flag per value that was missing; clean rows get []."""
+    out = quality_flags(impute(flag_missing(df)))
+
+    flags = out["quality_flags"].to_list()
+    assert flags[0] == []
+    assert flags[3] == [
         {
-            "timestamp,temperature,rpm": [
-                "2024-01-01 00:00:00,20.5,",
-                "2024-01-01 01:00:00,,1500",
-            ]
+            "sensor": "temperature",
+            "issue": "missing_value",
+            "action": "imputed",
+            "original_value": None,
         }
-    )
-    monkeypatch.setattr(pl, "read_excel", lambda _path: sheet)
-
-    out = load_data("ignored.xlsx")
-
-    assert out.columns == ["timestamp", "temperature", "rpm"]
-    assert out["timestamp"].to_list() == [
-        datetime(2024, 1, 1, 0),
-        datetime(2024, 1, 1, 1),
     ]
+    assert flags[4] == [
+        {
+            "sensor": "rpm",
+            "issue": "missing_value",
+            "action": "imputed",
+            "original_value": None,
+        }
+    ]
+
+
+def test_quality_flags_marks_values_that_could_not_be_filled():
+    """A value still null after imputation is flagged as not imputed."""
+    chunk = pl.DataFrame(
+        {
+            "machine_id": ["a", "b"],
+            "operating_mode": ["NORMAL", "NORMAL"],
+            **{c: [1.0, 2.0] for c in SENSOR_DATA},
+        }
+    ).with_columns(temperature=pl.Series([None, 2.0]))
+
+    out = quality_flags(impute(flag_missing(chunk)))
+
+    assert out["quality_flags"][0].to_list() == [
+        {
+            "sensor": "temperature",
+            "issue": "missing_value",
+            "action": "not_imputed",
+            "original_value": None,
+        }
+    ]
+
+
+def test_dai_adds_quality_flags_column(df):
+    """The pipeline output carries the quality_flags column."""
+    out = detect_and_impute(df)
+
+    assert [f["sensor"] for f in out["quality_flags"][3]] == ["temperature"]
+
+
+def test_load_data_reads_parquet_with_string_ids(tmp_path):
+    """Categorical id columns come back as strings; other columns are kept."""
+    path = tmp_path / "data.parquet"
+    pl.DataFrame(
+        {
+            "timestamp": [datetime(2024, 1, 1, 0), datetime(2024, 1, 1, 1)],
+            "machine_id": ["M001", "M002"],
+            "operating_mode": ["NORMAL", "IDLE"],
+            "temperature": [20.5, None],
+        }
+    ).with_columns(
+        pl.col("machine_id", "operating_mode").cast(pl.Categorical)
+    ).write_parquet(path)
+
+    out = load_data(path)
+
+    assert out.schema["machine_id"] == pl.String
+    assert out.schema["operating_mode"] == pl.String
+    assert out["machine_id"].to_list() == ["M001", "M002"]
     assert out["temperature"].to_list() == [20.5, None]
-    assert out["rpm"].to_list() == [None, 1500]
