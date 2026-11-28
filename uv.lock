@@ -2744,9 +2744,11 @@ dependencies = [
     { name = "fastexcel" },
     { name = "httpx" },
     { name = "httpx2" },
+    { name = "joblib" },
     { name = "numpy" },
     { name = "polars" },
     { name = "pydantic" },
+    { name = "scikit-learn" },
     { name = "uvicorn" },
 ]
 
@@ -2757,7 +2759,6 @@ dev = [
     { name = "prek" },
     { name = "pytest" },
     { name = "ruff" },
-    { name = "scikit-learn" },
     { name = "ty" },
 ]
 
@@ -2767,9 +2768,11 @@ requires-dist = [
     { name = "fastexcel", specifier = ">=0.21.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx2", specifier = ">=2.16.2" },
+    { name = "joblib", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "polars", specifier = ">=2.1.0" },
     { name = "pydantic", specifier = ">=2.14.3" },
+    { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
@@ -2780,7 +2783,6 @@ dev = [
     { name = "prek", specifier = ">=0.5.11" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "ruff", specifier = ">=0.17.6" },
-    { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "ty", specifier = ">=0.0.108" },
 ]
 

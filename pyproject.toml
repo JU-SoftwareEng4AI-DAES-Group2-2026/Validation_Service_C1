@@ -12,9 +12,11 @@ dependencies = [
     "fastexcel>=0.21.0",
     "httpx>=0.28.1",
     "httpx2>=2.16.2",
+    "joblib>=1.6.0",
     "numpy>=2.5.4",
     "polars>=2.1.0",
     "pydantic>=2.14.3",
+    "scikit-learn>=1.9.1",
     "uvicorn>=0.54.0",
 ]
 
@@ -29,6 +31,5 @@ dev = [
     "prek>=0.5.11",
     "pytest>=9.2.0",
     "ruff>=0.17.6",
-    "scikit-learn>=1.9.1",
     "ty>=0.0.108",
 ]
